@@ -124,7 +124,7 @@ func GetSizes(client *godo.Client) ([]string, map[string]godo.Size, error) {
 	return keys, sizeMap, nil
 }
 
-func GetUnassignedFloatingIPs(client *godo.Client, region string) ([]string, map[string]godo.FloatingIP, error) {
+func GetFloatingIPs(client *godo.Client, region string) ([]string, map[string]godo.FloatingIP, error) {
 	ctx := context.TODO()
 	opt := &godo.ListOptions{}
 	floatingIPMap := make(map[string]godo.FloatingIP)
@@ -135,7 +135,7 @@ func GetUnassignedFloatingIPs(client *godo.Client, region string) ([]string, map
 			return nil, nil, err
 		}
 		for _, i := range floatingIPs {
-			if i.Region.Slug == region && i.Droplet == nil {
+			if i.Region.Slug == region {
 				floatingIPMap[fmt.Sprintf("%s - %s", i.IP, i.Region.Slug)] = i
 			}
 		}
@@ -155,6 +155,36 @@ func GetUnassignedFloatingIPs(client *godo.Client, region string) ([]string, map
 	}
 	sort.Strings(keys)
 	return keys, floatingIPMap, nil
+}
+
+func GetDroplets(client *godo.Client) ([]string, map[string]godo.Droplet, error) {
+	ctx := context.TODO()
+	opt := &godo.ListOptions{}
+	dropletsMap := make(map[string]godo.Droplet)
+	for {
+		droplets, resp, err := client.Droplets.List(ctx, opt)
+		if err != nil {
+			return nil, nil, err
+		}
+		for _, d := range droplets {
+			dropletsMap[d.Name] = d
+		}
+		if resp.Links == nil || resp.Links.IsLastPage() {
+			break
+		}
+		page, err := resp.Links.CurrentPage()
+		if err != nil {
+			return nil, nil, err
+		}
+		opt.Page = page + 1
+	}
+
+	keys := make([]string, 0, len(dropletsMap))
+	for k := range dropletsMap {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys, dropletsMap, nil
 }
 
 func GetUnattachedVolumes(client *godo.Client, region string) ([]string, map[string]godo.Volume, error) {

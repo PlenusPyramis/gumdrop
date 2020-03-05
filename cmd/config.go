@@ -5,14 +5,21 @@ import (
 	"github.com/AlecAivazis/survey/v2"
 	"github.com/AlecAivazis/survey/v2/terminal"
 	"github.com/digitalocean/godo"
+	"github.com/olekukonko/tablewriter"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
+	"gopkg.in/yaml.v2"
 	"log"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 )
+
+type Configuration struct {
+	ApiKey   string
+	Droplets map[string]DropletConfig
+}
 
 type DropletConfig struct {
 	Name       string
@@ -45,6 +52,47 @@ func askOne(p survey.Prompt, response interface{}, opts ...survey.AskOpt) {
 	}
 }
 
+func unmarshalConfig() (config Configuration) {
+	config.Droplets = make(map[string]DropletConfig)
+	err := viper.Unmarshal(&config)
+	if err != nil {
+		log.Fatal(err)
+	}
+	return config
+}
+
+func saveConfig(config Configuration) {
+	//Custom save function for config to yaml.
+	//Viper.WriteConfig is semi-broken and cannot filter items from configs.
+	//See https://github.com/spf13/viper/issues/632
+
+	configMap := viper.AllSettings()
+	// Delete the config filename key to remove the self-reference to the output path:
+	delete(configMap, "config")
+
+	//Create yaml config string
+	cfgYaml, err := yaml.Marshal(&config)
+	if err != nil {
+		log.Fatal(err)
+	}
+	f, err := os.Create(viper.ConfigFileUsed())
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer f.Close()
+	f.Write(cfgYaml)
+	fmt.Println("Config file saved: ", viper.ConfigFileUsed())
+}
+
+func getDroplets(config Configuration) []string {
+	var names = make([]string, 0)
+	for _, cfg := range config.Droplets {
+		names = append(names, cfg.Name)
+	}
+	sort.Strings(names)
+	return names
+}
+
 var configCmd = &cobra.Command{
 	Use:   "config",
 	Short: "Droplet Configuration (list, create)",
@@ -59,7 +107,8 @@ var configCreateCmd = &cobra.Command{
 		initConfigFile()
 	},
 	Run: func(cmd *cobra.Command, args []string) {
-		client := GetClient(viper.GetString("api_key"))
+		config := unmarshalConfig()
+		client := GetClient(config.ApiKey)
 		fmt.Println("Getting account info ... ")
 		regions, regionMap, err := GetRegions(client)
 		if err != nil {
@@ -168,7 +217,7 @@ var configCreateCmd = &cobra.Command{
 					break
 				} else {
 					//Use existing floating IP
-					floatingIPs, _, err := GetUnassignedFloatingIPs(client, region)
+					floatingIPs, _, err := GetFloatingIPs(client, region)
 					if err != nil {
 						log.Fatal(err)
 					}
@@ -177,7 +226,7 @@ var configCreateCmd = &cobra.Command{
 						continue
 					}
 					askOne(&survey.Select{
-						Message: "Choose an existing/available Floating IP address : ",
+						Message: "Choose an existing Floating IP address : ",
 						Options: floatingIPs,
 					}, &answers.FloatingIP)
 					break
@@ -245,7 +294,8 @@ var configCreateCmd = &cobra.Command{
 			FloatingIP: strings.Split(answers.FloatingIP, " ")[0],
 			Volumes:    answers.Volumes,
 		}
-		fmt.Println(cfg)
+		config.Droplets[cfg.Name] = cfg
+		saveConfig(config)
 	},
 }
 
@@ -253,7 +303,31 @@ var configListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List existing droplet configurations",
 	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Println(viper.GetString("api_keysdsdsds"))
+		config := unmarshalConfig()
+		client := GetClient(config.ApiKey)
+		names := getDroplets(config)
+
+		_, droplets, err := GetDroplets(client)
+		if err != nil {
+			log.Fatal(err)
+		}
+		table := tablewriter.NewWriter(os.Stdout)
+		table.SetHeader([]string{"Name", "Size", "Image", "Region", "Floating IP", "Status"})
+		for _, name := range names {
+			fmt.Println(name)
+			dropCfg := config.Droplets[name]
+			d := droplets[dropCfg.Name]
+			status := "unused"
+			normalStyle := tablewriter.Colors{}
+			statusStyle := tablewriter.Colors{tablewriter.Bold, tablewriter.FgMagentaColor}
+			if d.ID != 0 && dropCfg.Region == d.Region.Slug {
+				status = d.Status
+				statusStyle = tablewriter.Colors{tablewriter.Bold, tablewriter.FgGreenColor}
+			}
+			table.Rich([]string{dropCfg.Name, dropCfg.Size, dropCfg.Image, dropCfg.Region, dropCfg.FloatingIP, status},
+				[]tablewriter.Colors{normalStyle, normalStyle, normalStyle, normalStyle, normalStyle, statusStyle})
+		}
+		table.Render()
 	},
 }
 
@@ -285,8 +359,7 @@ func initConfigFile() {
 						fmt.Println(err)
 					}
 				}
-				viper.Set("api_key", apiKey)
-				fmt.Println(apiKey)
+				viper.Set("apikey", apiKey)
 				viper.WriteConfigAs(cfgFile)
 				if err := os.Chmod(cfgFile, 0600); err != nil {
 					log.Fatal(err)

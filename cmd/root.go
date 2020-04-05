@@ -16,7 +16,7 @@ var cfgFile string
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
 	Use:   "gumdrop",
-	Short: "Create DigitalOcean droplets with custom cloud-init config",
+	Short: "Manage DigitalOcean droplets from the command line with cloud-init",
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
 		err := initConfig()
 		if err != nil {
